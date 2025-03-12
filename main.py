@@ -1,48 +1,57 @@
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, UploadFile, HTTPException
 import rsa
 import os
 
 app = FastAPI()
 
-# Generate RSA keys (Save them if needed)
+# Generate RSA keys (Store these securely in production)
 (public_key, private_key) = rsa.newkeys(512)
 
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)  # Ensure upload directory exists
 
-# ✅ Upload and Encrypt File
+# ✅ Secure File Upload & Encryption
 @app.post("/upload/")
 async def upload_file(file: UploadFile = File(...)):
-    file_location = os.path.join(UPLOAD_DIR, file.filename)
+    try:
+        file_location = os.path.join(UPLOAD_DIR, file.filename)
+        
+        # Read file content
+        file_data = await file.read()
+        
+        # Encrypt file content
+        encrypted_data = rsa.encrypt(file_data, public_key)
+        
+        # Save encrypted file
+        encrypted_path = file_location + ".enc"
+        with open(encrypted_path, "wb") as ef:
+            ef.write(encrypted_data)
+        
+        return {"message": f"File '{file.filename}' uploaded and encrypted successfully!"}
     
-    with open(file_location, "wb") as buffer:
-        buffer.write(file.file.read())
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
-    # Encrypt file
-    with open(file_location, "rb") as f:
-        data = f.read()
-    
-    encrypted_data = rsa.encrypt(data, public_key)
-    
-    with open(file_location + ".enc", "wb") as ef:
-        ef.write(encrypted_data)
-    
-    return {"message": f"File '{file.filename}' uploaded and encrypted successfully!"}
-
-# ✅ Download and Decrypt File
+# ✅ Secure File Download & Decryption
 @app.get("/download/{filename}")
 async def download_file(filename: str):
-    encrypted_path = os.path.join(UPLOAD_DIR, filename + ".enc")
+    try:
+        encrypted_path = os.path.join(UPLOAD_DIR, filename + ".enc")
+        
+        if not os.path.exists(encrypted_path):
+            raise HTTPException(status_code=404, detail="File not found!")
 
-    if not os.path.exists(encrypted_path):
-        return {"error": "File not found!"}
-    
-    with open(encrypted_path, "rb") as ef:
-        encrypted_data = ef.read()
-    
-    decrypted_data = rsa.decrypt(encrypted_data, private_key)
+        # Read encrypted file
+        with open(encrypted_path, "rb") as ef:
+            encrypted_data = ef.read()
 
-    return {"filename": filename, "content": decrypted_data.decode(errors="ignore")}
+        # Decrypt file
+        decrypted_data = rsa.decrypt(encrypted_data, private_key)
+
+        return {"filename": filename, "content": decrypted_data.decode(errors="ignore")}
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Download failed: {str(e)}")
 
 @app.get("/")
 async def root():
