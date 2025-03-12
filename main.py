@@ -1,43 +1,49 @@
-from fastapi import FastAPI, UploadFile, File
-from pymongo import MongoClient
+from fastapi import FastAPI, File, UploadFile
 import rsa
-import base64
+import os
 
 app = FastAPI()
 
-# Connect to MongoDB (Replace with your MongoDB URL)
-client = MongoClient("mongodb://localhost:27017")
-db = client["secure_storage"]
-collection = db["files"]
-
-# Generate RSA keys (Use this only once, then save keys securely)
+# Generate RSA keys (Save them if needed)
 (public_key, private_key) = rsa.newkeys(512)
 
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)  # Ensure upload directory exists
+
+# ✅ Upload and Encrypt File
 @app.post("/upload/")
 async def upload_file(file: UploadFile = File(...)):
-    file_data = await file.read()
+    file_location = os.path.join(UPLOAD_DIR, file.filename)
+    
+    with open(file_location, "wb") as buffer:
+        buffer.write(file.file.read())
 
-    # Encrypt file data using RSA public key
-    encrypted_data = rsa.encrypt(file_data, public_key)
-    encoded_data = base64.b64encode(encrypted_data).decode()  # Store as base64 string
+    # Encrypt file
+    with open(file_location, "rb") as f:
+        data = f.read()
+    
+    encrypted_data = rsa.encrypt(data, public_key)
+    
+    with open(file_location + ".enc", "wb") as ef:
+        ef.write(encrypted_data)
+    
+    return {"message": f"File '{file.filename}' uploaded and encrypted successfully!"}
 
-    # Save encrypted data in MongoDB
-    collection.insert_one({"filename": file.filename, "data": encoded_data})
-
-    return {"message": "File uploaded & encrypted successfully"}
-
+# ✅ Download and Decrypt File
 @app.get("/download/{filename}")
-def download_file(filename: str):
-    file_record = collection.find_one({"filename": filename})
-    if not file_record:
-        return {"error": "File not found"}
+async def download_file(filename: str):
+    encrypted_path = os.path.join(UPLOAD_DIR, filename + ".enc")
 
-    # Decode and decrypt data
-    encrypted_data = base64.b64decode(file_record["data"])
+    if not os.path.exists(encrypted_path):
+        return {"error": "File not found!"}
+    
+    with open(encrypted_path, "rb") as ef:
+        encrypted_data = ef.read()
+    
     decrypted_data = rsa.decrypt(encrypted_data, private_key)
 
     return {"filename": filename, "content": decrypted_data.decode(errors="ignore")}
 
 @app.get("/")
-def home():
-    return {"message": "Secure Cloud Storage API is Running"}
+async def root():
+    return {"message": "Secure Cloud Storage API is running!"}
